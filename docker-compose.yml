@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  db:
+    image: pgvector/pgvector:pg16      # Postgres 16 with pgvector already installed
+    container_name: tracefly_db
+    environment:
+      POSTGRES_DB: tracefly
+      POSTGRES_USER: tracefly
+      POSTGRES_PASSWORD: tracefly_local
+    ports:
+      - "5432:5432"                    # Postgres is available on your machine at port 5432
+    volumes:
+      - tracefly_data:/var/lib/postgresql/data   # data persists when you restart
+
+volumes:
+  tracefly_data:
