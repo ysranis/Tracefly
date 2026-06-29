@@ -178,6 +178,7 @@ All 8 phases built and verified working.
 - `test_agent/__init__.py` deleted — was causing ADK ValueError on startup
 - `min_cluster_size` lowered 5→3 — was preventing cluster discovery on small datasets
 - Agent instruction rewritten to loop enrichment — was calling once and moving on
+- Enrichment batch classification — 10 traces per API call, 20 concurrent batches, failures prioritised first; 10–15× speedup (Issue #9, branch `perf/enrichment-speed-v2`)
 
 ### What's next (post-MVP)
 - Add a UI / dashboard to browse clusters and proposals
