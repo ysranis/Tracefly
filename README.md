@@ -1,4 +1,4 @@
-# TraceFly — Product Manager's Guide
+# TraceFly 
 ### What it is, how it works, and how to try it yourself
 
 ---
