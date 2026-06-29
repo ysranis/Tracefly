@@ -69,7 +69,12 @@ def generate_suggestions(top_n: int = 3) -> dict:
 
             # Get representative failure AND success traces
             # Having both gives Claude contrast — what worked vs what didn't
-            rep_ids = json.loads(rep_trace_ids_json) if rep_trace_ids_json else []
+            if rep_trace_ids_json is None:
+                rep_ids = []
+            elif isinstance(rep_trace_ids_json, list):
+                rep_ids = rep_trace_ids_json
+            else:
+                rep_ids = json.loads(rep_trace_ids_json)
             failure_examples = _get_trace_examples(cursor, rep_ids, outcome="failure")
             success_examples = _get_trace_examples_by_intent(
                 cursor, intent, outcome="success", limit=2
