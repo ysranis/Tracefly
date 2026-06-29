@@ -259,6 +259,74 @@ Pipeline always runs to completion. `send_digest()` executes after every run, pr
 
 ---
 
+---
+
+## Issue #9 — `[PERFORMANCE]` Enrichment does not scale — 1 min per 50 traces
+
+**Date:** 2026-06-29
+**Type:** `[PERFORMANCE]` — Speed / Throughput
+
+**Symptom:**
+Enrichment observed at ~1 minute per 50 traces in practice. A user accumulating 2000 traces over one week would face a ~40-minute enrichment run before any clustering or suggestions could appear — an unacceptable UX blocker.
+
+**Root Cause:**
+Even with `ThreadPoolExecutor`, each trace required two sequential Claude API calls — one for intent and one for error_mode:
+
+```
+Thread worker → _classify_intent()  → API call (300 ms round-trip)
+             → _classify_error_mode() → API call (300 ms round-trip)
+```
+
+With `max_workers=5` and `batch_size=100`:
+- 100 traces ÷ 5 workers = 20 concurrent rounds
+- Each round = 2 sequential API calls ≈ 600 ms
+- Total API time per 100-trace batch ≈ 12 seconds minimum
+- At 50 traces/min → 2000 traces ≈ 40 minutes
+
+**Fix Applied (3 improvements):**
+
+**Improvement #1 — Raise max_workers 5 → 20**
+Anthropic's rate limits allow significantly higher concurrency for Haiku. Raising workers gives immediate throughput gains for any remaining per-trace work.
+
+**Improvement #2 — Prioritise failures/near_misses in the fetch query**
+Changed the `ORDER BY` clause so failures and near_misses are fetched before successes:
+```sql
+ORDER BY
+    CASE WHEN user_feedback = 'thumbs_up'
+              AND COALESCE(escalation_flag, false) = false
+         THEN 1 ELSE 0 END ASC,
+    created_at ASC
+```
+With a 2000-trace backlog, this ensures the clustering and suggestion pipeline sees actionable failure data on the first pass rather than waiting for all successes to be processed first.
+
+**Improvement #3 — Batch LLM classification (10 traces per API call)**
+Replaced `_classify_intent()` and `_classify_error_mode()` (one API call each, per trace) with four new batch functions:
+
+| New function | What it does |
+|---|---|
+| `_intent_batch_call(claude, batch)` | One Claude call classifies up to 10 traces at once |
+| `_classify_intents_batch(claude, rows)` | Splits rows into batches of 10, runs up to 20 concurrently |
+| `_error_mode_batch_call(claude, batch)` | One Claude call for up to 10 non-success traces; loops detected by rule |
+| `_classify_error_modes_batch(claude, rows)` | Same pattern for error modes; skips success traces entirely |
+
+API call reduction per 100-trace batch:
+
+| Step | Before | After |
+|---|---|---|
+| Intent | 100 sequential calls (5 concurrent) | 10 batch calls (10 concurrent) |
+| Error mode | ~70 sequential calls (5 concurrent) | 7 batch calls (20 concurrent) |
+| **Total** | **~170 API calls** | **~17 API calls** |
+
+Estimated speedup: **10–15×** — 2000 traces from ~40 min → ~3–5 min.
+
+**Files Changed:**
+- `tracefly_agent/tools/enrich.py` — full rewrite of classification layer; removed `_classify_trace`, `_classify_intent`, `_classify_error_mode`; added `_intent_batch_call`, `_classify_intents_batch`, `_error_mode_batch_call`, `_classify_error_modes_batch`
+
+**Outcome:**
+API call count per 100-trace batch cut from ~170 to ~17. Concurrency ceiling raised from 5 to 20. Failures processed first so the pipeline delivers useful clusters sooner even mid-backlog.
+
+---
+
 ## Quick Reference
 
 | # | Type | Issue | Fix Summary |
@@ -271,3 +339,4 @@ Pipeline always runs to completion. `send_digest()` executes after every run, pr
 | 6 | `[PERFORMANCE]` | Enrichment too slow | ThreadPoolExecutor + batch embedding |
 | 7 | `[COST]` | Sonnet used everywhere | Switch all models to haiku |
 | 8 | `[ORCHESTRATION]` | Agent stops after clustering | Add `next_step` to all tool returns; rewrite instruction |
+| 9 | `[PERFORMANCE]` | Enrichment doesn't scale (1 min/50 traces) | Batch 10 traces per API call; max_workers 5→20; prioritise failures in query |
